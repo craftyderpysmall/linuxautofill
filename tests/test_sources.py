@@ -8,6 +8,7 @@ import urllib.request
 from email.message import EmailMessage
 
 from linuxautofill import http_source, imap_source
+from linuxautofill.detect import find_link
 
 NOW = datetime.datetime(2026, 10, 31, 12, 0, tzinfo=datetime.timezone.utc)
 
@@ -48,6 +49,24 @@ class ParseMessageTest(unittest.TestCase):
         markup = '<a href="https://t.example/x"><img alt="Confirm email" src="b.png"></a>'
         _, _, links = imap_source.parse_message(build_email(html=markup), now=NOW)
         self.assertEqual(links[0].label, "Confirm email")
+
+    def test_html_with_a_bare_url_and_no_anchors(self):
+        # Workday sends this. Gmail's web page makes the URL clickable, but the email doesn't.
+        url = "https://wd1.myworkdaysite.com/recruiting/acme/EXTERNAL/activate/token123/?redirect=%2Fjob"
+        markup = (
+            "<html><head><title>x</title></head><body><table><tr><td>"
+            "Click this link to confirm your email address and complete setup for your candidate\r\n"
+            f"      account<br>{url}<br>The link will expire after 24 hours."
+            "</td></tr></table></body></html>"
+        )
+        _, text, links = imap_source.parse_message(build_email(html=markup), now=NOW)
+        self.assertEqual(find_link(links, text), url)
+
+    def test_line_breaks_separate_words(self):
+        _, text, _ = imap_source.parse_message(
+            build_email(html="<p>Your code:<br>482913<br/>Thanks</p>"), now=NOW
+        )
+        self.assertIn("code:\n482913\nThanks", text)
 
     def test_plain_email_links_are_found(self):
         message = EmailMessage()

@@ -16,6 +16,7 @@ log = logging.getLogger(__name__)
 HOST = "imap.gmail.com"
 # Measured behind Gmail's receive time: IDLE 10-23s, STATUS 6-12s, reopening the inbox 3s.
 POLL_SECONDS = 0.5
+SLOW_CHECK_SECONDS = 2
 SOCKET_TIMEOUT = 30
 MAX_AGE = datetime.timedelta(minutes=10)
 # Enough for any verification email, without downloading large attachments.
@@ -35,7 +36,9 @@ class _TextExtractor(HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         attributes = dict(attrs)
-        if tag in ("script", "style", "head", "title"):
+        if tag == "br":
+            self.parts.append("\n")
+        elif tag in ("script", "style", "head", "title"):
             self.skipping += 1
         elif tag == "a" and attributes.get("href"):
             self.href = attributes["href"].strip()
@@ -51,7 +54,7 @@ class _TextExtractor(HTMLParser):
         if tag == "a" and self.href:
             self.links.append(Link(self.href, " ".join(" ".join(self.label).split()), self.context))
             self.href = None
-        if tag in ("p", "div", "tr", "td", "br", "table", "h1", "h2", "h3", "span"):
+        if tag in ("p", "div", "tr", "td", "table", "h1", "h2", "h3", "span"):
             self.parts.append("\n")
 
     def handle_data(self, data):
@@ -94,10 +97,11 @@ def _content(part):
 
 
 def _read_body(message):
-    """Prefer plain text for reading, but HTML for links, since buttons only exist there."""
+    """Prefer plain text for reading. Links come from HTML, since buttons only exist there,
+    then from bare URLs, which some HTML emails use instead of real links."""
     plain = _content(message.get_body(preferencelist=("plain",)))
     text, links = parse_html(_content(message.get_body(preferencelist=("html",))))
-    return plain or text, links or plain_links(plain)
+    return plain or text, links + plain_links(f"{plain}\n{text}")
 
 
 def log_timing(metadata, raw):
@@ -152,7 +156,12 @@ def _watch(address, password, messages, last_uid, on_connected):
         on_connected()
 
         while True:
-            if _next_uid(imap) - 1 > last_uid:
+            started = time.monotonic()
+            has_new_mail = _next_uid(imap) - 1 > last_uid
+            elapsed = time.monotonic() - started
+            if elapsed > SLOW_CHECK_SECONDS:
+                log.warning("mail %s: check took %.1fs", address, elapsed)
+            if has_new_mail:
                 last_uid = _fetch_new(imap, last_uid, messages)
             yield last_uid
             time.sleep(POLL_SECONDS)

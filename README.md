@@ -238,6 +238,7 @@ Gmail's own processing. Any time a sender takes before Gmail has the email can't
 | `sms: rejected request from <ip> with 401` | The automation's token doesn't match the config |
 | `mail <address>: IMAP error: ...` | Usually a wrong app password. It keeps retrying |
 | `mail <address>: connection lost: ...` | The network dropped, and it reconnects by itself |
+| `mail <address>: check took Ns` | Gmail or the network was slow to answer, which delays new mail by that much |
 | `<source>: delivery failed: ...` | The clipboard couldn't be reached, so check that you're logged in |
 
 The log never contains codes, links or message text.
