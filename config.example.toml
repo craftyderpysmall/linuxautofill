@@ -1,0 +1,20 @@
+# Copy to ~/.config/linuxautofill/config.toml and run: chmod 600 on it.
+# The service won't start if other users can read this file.
+
+# Seconds before a code is cleared from the clipboard.
+clear_after = 60
+
+# Words to treat as code keywords, on top of the built-in list.
+extra_keywords = []
+
+# Receives texts from the iPhone Shortcut. Remove this section to turn SMS off.
+[http]
+port = 8787
+# Generate with: python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+token = ""
+
+# Repeat this section for each Gmail account, or remove it to turn email off.
+[[gmail]]
+address = ""
+# An app password from https://myaccount.google.com/apppasswords, not your Google password.
+app_password = ""

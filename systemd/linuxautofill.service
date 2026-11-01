@@ -1,0 +1,13 @@
+[Unit]
+Description=Verification code autofill from iPhone SMS and Gmail
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+# The installed unit is a symlink to this file, which locates the project.
+ExecStart=/bin/sh -c 'cd "$$(dirname "$$(readlink -f %h/.config/systemd/user/linuxautofill.service)")/.." && exec /usr/bin/python3 -m linuxautofill'
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target
