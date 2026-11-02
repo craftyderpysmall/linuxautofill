@@ -32,6 +32,7 @@ Gmail accounts ------- checked over IMAP ---------> imap_source --+
 - Python, with no packages to install. Tested on 3.14.
 - `wl-clipboard`, `libnotify` and `xdg-utils`.
 - `wtype` for click-to-paste. Without it, codes are still copied, but clicking does nothing.
+- `avahi`, so the iPhone can find this computer by name.
 - An iPhone on the same network for SMS, and 2-Step Verification on each Gmail account.
 
 ## Setup
@@ -42,10 +43,10 @@ Run these commands from the project folder, wherever you keep it:
 cd path/to/LinuxAutofill
 ```
 
-### 1. Install the paste tool
+### 1. Install the tools
 
 ```sh
-sudo pacman -S wtype
+sudo pacman -S --needed wtype avahi
 ```
 
 ### 2. Create the config
@@ -81,19 +82,34 @@ app_password = "..."
 
 Use an app password, not your Google password. Spaces in it don't matter.
 
-### 4. Allow your iPhone through the firewall
+### 4. Let your iPhone reach this computer
 
-This step and the next need two IP addresses:
-
-- **This computer:** `ip -4 -br addr` (ignore the `/22` or similar at the end).
-- **iPhone:** **Settings > Wi-Fi**, then the **ⓘ** next to your network. Turn off **Private Wi-Fi Address** on
-  that screen first, so the address stays the same.
-
-If you can, reserve both addresses on your router so that they don't change. Then allow the iPhone:
+Your router can give this computer a new IP address after a restart, so the automation connects by name instead.
+Avahi announces that name on your network, and `ufw`'s default rules already allow its traffic:
 
 ```sh
-sudo ufw allow from <iphone-ip> to any port 8787 proto tcp
+sudo systemctl enable --now avahi-daemon
+avahi-resolve -n "$(hostnamectl hostname).local"
 ```
+
+The last command should print this computer's name, ending in `.local`, and its current address. You'll use that
+name in step 6. If another device already has the name, Avahi adds a number, like `mypc-2.local`.
+`journalctl -u avahi-daemon` shows the name it chose.
+
+Next, find your network's range, which is the first value that this prints, like `192.168.68.0/22`:
+
+```sh
+ip -4 route show scope link
+```
+
+Then allow that range through the firewall:
+
+```sh
+sudo ufw allow from <network-range> to any port 8787 proto tcp
+```
+
+The iPhone's address can change too, even with **Private Wi-Fi Address** turned off, so this allows every device on
+your network instead of just the phone. Each request still needs your token.
 
 ### 5. Start the service
 
@@ -119,7 +135,7 @@ Choose **Run Immediately**, then **New Blank Automation**, and add **Get Content
 
 | Setting | Value |
 |---|---|
-| URL | `http://<this-computer-ip>:8787/message` |
+| URL | `http://<hostname>.local:8787/message` |
 | Method | POST |
 | Header | `Authorization` = `Bearer <your token>` |
 | Request Body | JSON |
@@ -173,7 +189,8 @@ systemctl --user restart linuxautofill
 ```
 
 To uninstall, stop it and keep it off, then delete `~/.config/systemd/user/linuxautofill.service` and
-`~/.config/linuxautofill/`. Also remove the `ufw` rule, the iPhone automation, and your Gmail app passwords.
+`~/.config/linuxautofill/`. Also remove the `ufw` rule, the iPhone automation, and your Gmail app passwords. If
+nothing else needs Avahi, run `sudo systemctl disable --now avahi-daemon`.
 
 ## Configuration
 
@@ -245,10 +262,39 @@ The log never contains codes, links or message text.
 
 ## Troubleshooting
 
-**No log line appears when a text arrives.** The request isn't reaching this computer. Open
-`http://<this-computer-ip>:8787/` in Safari on the iPhone. An error page from the service, such as "Unsupported
-method", means the network and firewall are fine. If it can't connect, run `sudo ufw status` and compare the rule
-with the iPhone's current address. Then check Local Network access and **Run Immediately** in the automation.
+**No log line appears when a text arrives, or the automation says it could not connect to the server.** The
+request isn't reaching this computer. If the automation's URL uses an IP address instead of the `.local` name,
+this computer may have a new address since it restarted, so switch to the name.
+
+Otherwise, open `http://<hostname>.local:8787/` in Safari on the iPhone. An error page from the service, such as
+"Unsupported method", means the network and firewall are fine, so check Local Network access and **Run
+Immediately** in the automation.
+
+If Safari can't connect, try `http://<this-computer-ip>:8787/`, using the address from `ip -4 -br addr` without
+the `/22` or similar at the end. If that works, the iPhone can't find the name, which is covered next. If it
+doesn't, check that the iPhone is on the same network, then run `sudo ufw status` and check that the rule's range
+includes the iPhone's address, shown under **Settings > Wi-Fi > ⓘ**.
+
+**The iPhone can't find the `.local` name.** Check that `systemctl is-active avahi-daemon` prints `active`. If it
+does, your router may be blocking name lookups, which some mesh routers do. Give this computer a fixed address
+instead. The simplest way is to reserve one in your router's settings. Without router access, set one here:
+
+```sh
+nmcli -t -f NAME,DEVICE connection show --active
+nmcli -g IP4.GATEWAY,IP4.DNS device show <device>
+nmcli connection modify <connection> ipv4.method manual ipv4.addresses <address>/<prefix> ipv4.gateway <gateway> ipv4.dns "<dns>"
+nmcli connection up <connection>
+```
+
+The first two commands show your connection, device, gateway and DNS servers. Separate DNS servers with spaces in
+the third command. Pick an address inside your network's range, far from those in use, because the router doesn't
+know it's taken and could still give it to another device. Then use that address in the automation's URL. This only
+affects that one connection. To undo it:
+
+```sh
+nmcli connection modify <connection> ipv4.method auto ipv4.addresses "" ipv4.gateway "" ipv4.dns ""
+nmcli connection up <connection>
+```
 
 **A real code wasn't detected.** Find the wording, then add a new keyword with `extra_keywords` if that's what's
 missing.
