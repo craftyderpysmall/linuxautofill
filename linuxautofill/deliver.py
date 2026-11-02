@@ -1,4 +1,4 @@
-"""Hand a code or link to the desktop: clipboard, notification, click action, clear later."""
+"""Hand a code or link to the desktop: clipboard, notification, click action, restore later."""
 
 import html
 import logging
@@ -13,11 +13,26 @@ log = logging.getLogger(__name__)
 # The same code can arrive twice, for example by SMS and email.
 DEDUPE_SECONDS = 120
 
+# wl-copy can only offer one format, so the most useful one is kept.
+RESTORE_TYPES = (
+    "text/uri-list",
+    "text/plain;charset=utf-8",
+    "text/plain",
+    "UTF8_STRING",
+    "image/png",
+)
+# Set by password managers, which clear these themselves and expect them to stay gone.
+SECRET_TYPE = "x-kde-passwordManagerHint"
+
 
 class Deliverer:
     def __init__(self, clear_after):
         self.clear_after = clear_after
         self.recent = {}
+        self.lock = threading.Lock()
+        self.active = None
+        self.saved = None
+        self.timer = None
 
     def deliver(self, code, sender):
         """Deliver a code and return True, or return False for a recent duplicate."""
@@ -44,19 +59,47 @@ class Deliverer:
             return False
         self.recent[value] = now
 
-        self._copy(value)
+        with self.lock:
+            snapshot = self._snapshot()
+            # A second code replacing the first shouldn't make the first one what's restored.
+            if not (snapshot and self.active and snapshot[1] == self.active.encode()):
+                self.saved = snapshot
+            self._copy(value.encode())
+            if self.timer:
+                self.timer.cancel()
+            self.active = value
+            self.timer = threading.Timer(self.clear_after, self._restore_if_unchanged, args=(value,))
+            self.timer.start()
+
         threading.Thread(
             target=self._notify, args=(value, summary, body, action, on_click), daemon=True
         ).start()
-        threading.Timer(self.clear_after, self._clear_if_unchanged, args=(value,)).start()
         return True
 
-    def _copy(self, value):
+    def _snapshot(self):
+        """Return the clipboard as (type, data), or None if it can't or shouldn't be kept."""
+        try:
+            listed = subprocess.run(
+                ["wl-paste", "--list-types"], capture_output=True, text=True, timeout=2
+            )
+            types = listed.stdout.splitlines()
+            if listed.returncode != 0 or not types or SECRET_TYPE in types:
+                return None
+            mime = next((t for t in RESTORE_TYPES if t in types), types[0])
+            data = subprocess.run(
+                ["wl-paste", "--no-newline", "--type", mime], capture_output=True, timeout=2
+            )
+            return (mime, data.stdout) if data.returncode == 0 else None
+        except (OSError, subprocess.SubprocessError) as error:
+            log.warning("could not read clipboard: %s", type(error).__name__)
+            return None
+
+    def _copy(self, data, mime=None):
         # Sent over stdin so the value isn't visible in the process list. wl-copy
         # stays running in the background, so its output can't be captured here.
         subprocess.run(
-            ["wl-copy"],
-            input=value.encode(),
+            ["wl-copy", *(["--type", mime] if mime else [])],
+            input=data,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=True,
@@ -98,12 +141,20 @@ class Deliverer:
             start_new_session=True,
         )
 
-    def _clear_if_unchanged(self, value):
-        try:
-            current = subprocess.run(
-                ["wl-paste", "--no-newline"], capture_output=True, timeout=5
-            )
-            if current.stdout == value.encode():
-                subprocess.run(["wl-copy", "--clear"], timeout=5)
-        except (OSError, subprocess.SubprocessError) as error:
-            log.warning("could not clear clipboard: %s", type(error).__name__)
+    def _restore_if_unchanged(self, value):
+        with self.lock:
+            if self.active != value:
+                return
+            saved, self.active, self.saved = self.saved, None, None
+            try:
+                current = subprocess.run(
+                    ["wl-paste", "--no-newline"], capture_output=True, timeout=5
+                )
+                if current.stdout != value.encode():
+                    return
+                if saved:
+                    self._copy(saved[1], saved[0])
+                else:
+                    subprocess.run(["wl-copy", "--clear"], timeout=5)
+            except (OSError, subprocess.SubprocessError) as error:
+                log.warning("could not restore clipboard: %s", type(error).__name__)

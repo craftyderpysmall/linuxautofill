@@ -8,8 +8,8 @@ inboxes. When a verification code or link arrives, it copies it to the clipboard
 | A code, like `482913` or `G-482913` | Type the code into the focused window | iPhone SMS, Gmail |
 | A verification link, like a "Verify My Email" button | Open the link in your browser | Gmail only |
 
-The clipboard is cleared after 60 seconds, unless you've copied something else since. Nothing is typed or opened
-unless you click.
+After 60 seconds, the clipboard goes back to what you had copied before, unless you've copied something else since.
+Nothing is typed or opened unless you click.
 
 ## How it works
 
@@ -198,7 +198,7 @@ Settings are in `~/.config/linuxautofill/config.toml`. Restart the service after
 
 | Setting | Default | Purpose |
 |---|---|---|
-| `clear_after` | `60` | Seconds until the clipboard is cleared and the notification closes |
+| `clear_after` | `60` | Seconds until the clipboard is restored and the notification closes |
 | `extra_keywords` | `[]` | Words to treat as code keywords, such as other languages: `["clave", "código"]` |
 | `[http] host` | `0.0.0.0` | Address to listen on |
 | `[http] port` | `8787` | Port to listen on. Update the automation and `ufw` rule if you change it |
@@ -257,6 +257,8 @@ Gmail's own processing. Any time a sender takes before Gmail has the email can't
 | `mail <address>: connection lost: ...` | The network dropped, and it reconnects by itself |
 | `mail <address>: check took Ns` | Gmail or the network was slow to answer, which delays new mail by that much |
 | `<source>: delivery failed: ...` | The clipboard couldn't be reached, so check that you're logged in |
+| `could not read clipboard: ...` | Your previous clipboard wasn't saved, so it's cleared afterwards instead |
+| `could not restore clipboard: ...` | The code or link may still be on the clipboard |
 
 The log never contains codes, links or message text.
 
@@ -313,6 +315,11 @@ project folder.
 - **Almost all your texts are sent to this computer.** That's a result of the broad filter. Their contents are
   discarded after checking, but they cross your Wi-Fi as plain HTTP, along with the token, so don't use this on
   shared networks without a VPN.
+- **Your previous clipboard comes back in one format.** Plain text, files and images are restored, but formatted
+  text comes back without its formatting. It's held in memory only, so restarting the service before the 60 seconds
+  are up loses it and leaves the code on the clipboard.
+- **Password managers.** Copied passwords aren't restored if the manager marks them as secret, as KeePassXC does.
+  One that doesn't could have a password put back after it cleared it.
 - **Gmail only.** Other email providers aren't supported.
 - **Spam isn't watched.** Only the Inbox is checked.
 - **Gmail may limit heavy use.** Polling makes roughly 130,000 requests a day per account. If the log fills with
